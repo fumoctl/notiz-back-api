@@ -449,3 +449,67 @@ Elimina la imagen adjunta de la base de datos.
    ./scripts/test_api.sh
    ```
 
+---
+
+## 7. Cómo Habilitar el Login con Google (OAuth 2.0 / Google Identity Services)
+
+El backend ya incluye soporte nativo en `POST /api/auth/google` (`src/auth.rs`) para validar tokens de identidad (`id_token`) emitidos por Google Sign-In. No requiere almacenar un `client_secret` en el backend porque utiliza el flujo de verificación de `id_token` firmado por Google.
+
+### Paso 1: Obtener el `GOOGLE_CLIENT_ID` en Google Cloud Console
+
+1. Entra a [Google Cloud Console](https://console.cloud.google.com/) y crea o selecciona un proyecto.
+2. Ve a **APIs y servicios → Pantalla de consentimiento de OAuth** (*OAuth consent screen*):
+   - Selecciona tipo **Externo** (*External*).
+   - Completa el nombre de la aplicación (ej. `Notiz`), correo de soporte y guarda.
+   - Si está en modo *Testing*, agrega tu correo electrónico en la sección **Usuarios de prueba** (*Test users*).
+3. Ve a **APIs y servicios → Credenciales** (*Credentials*) → **Crear credenciales → ID de cliente de OAuth** (*OAuth client ID*):
+   - **Tipo de aplicación:** `Aplicación web` (*Web application*).
+   - **Orígenes de JavaScript autorizados** (*Authorized JavaScript origins*): agrega la URL donde correrá tu frontend (por ejemplo `http://localhost:5173`, `http://localhost:3000` y `http://127.0.0.1:5173`).
+4. Copia el **ID de cliente** generado (tiene el formato `1234567890-abcdefg.apps.googleusercontent.com`).
+
+---
+
+### Paso 2: Configurar la variable en `.env`
+
+Abre el archivo `.env` en la raíz de `notiz-back-api` y asigna tu Client ID:
+
+```dotenv
+GOOGLE_CLIENT_ID=1234567890-abcdefg.apps.googleusercontent.com
+```
+
+Reinicia el backend (`cargo run`) para que tome la nueva variable de entorno.
+
+---
+
+### Paso 3: Cómo conectarlo desde el Frontend
+
+1. En el frontend (React, Vue, Svelte, Astro o HTML/JS puro), utiliza el botón oficial de **Google Identity Services** (o librerías como `@react-oauth/google` con el componente `<GoogleLogin />`).
+2. Cuando el usuario inicia sesión en el popup de Google, Google devuelve un objeto de respuesta cuya propiedad `credential` es el **`id_token`** (un JWT firmado por Google).
+3. Envía ese `id_token` al backend:
+
+```javascript
+const response = await fetch("http://localhost:3000/api/auth/google", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    id_token: googleResponse.credential,
+  }),
+});
+
+const { token, user } = await response.json();
+// Guarda `token` (JWT propio de Notiz) para enviarlo en `Authorization: Bearer ${token}`
+```
+
+---
+
+### Paso 4: Qué hace el Backend internamente (`POST /api/auth/google`)
+
+1. Verifica que `GOOGLE_CLIENT_ID` esté configurado en `.env`.
+2. Consulta a `https://oauth2.googleapis.com/tokeninfo?id_token=<token>` para validar la firma y expiración del token de Google.
+3. Comprueba que el campo `aud` (*audience*) coincida exactamente con tu `GOOGLE_CLIENT_ID` y que `email_verified` sea `"true"`.
+4. **Resolución de cuenta en YugabyteDB / PostgreSQL:**
+   - Si el usuario **no existe**, crea automáticamente el registro en `users` con `google_sub`, `email`, `password_hash = NULL` y un `username` único generado a partir de su nombre/correo.
+   - Si el usuario **ya se había registrado antes con correo y contraseña** usando ese mismo email, vincula automáticamente su `google_sub` a la cuenta existente para que pueda entrar con cualquiera de los dos métodos sin perder sus notas ni carpetas.
+5. Devuelve el JWT propio del backend (`AuthResponse`: `{ token, user }`), idéntico al de `/api/auth/login`.
+
+
